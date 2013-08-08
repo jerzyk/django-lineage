@@ -3,6 +3,7 @@
 import re
 
 from django import template
+from django.template.base import token_kwargs
 from django.template.defaulttags import url
 
 from .. import settings
@@ -56,24 +57,32 @@ def ifancestor(parser, token):
 
 @register.tag
 def ancestor(parser, token):
-    # If there is only one argument (2 including tag name)
-    # parse it as a variable
     bits = token.split_contents()
-    if len(bits) == 2:
+
+    exact = False
+
+    if len(bits) >= 2:
         arg = parser.compile_filter(bits[1])
+
+        # check last bits for the exact=True|False
+        extra_context = token_kwargs(bits[-1:], parser, support_legacy=True)
+        if 'exact' in extra_context:
+            token.contents = u" ".join(bits[:-1])
+        exact = extra_context.get('exact', False)
     else:
         arg = None
 
     # Also pass all arguments to the original url tag
     url_node = url(parser, token)
 
-    return AncestorNode(url_node, arg=arg)
+    return AncestorNode(url_node, arg=arg, exact=exact)
 
 
 class AncestorNode(template.Node):
-    def __init__(self, url_node, arg=None, contents=None):
+    def __init__(self, url_node, arg=None, exact=False, contents=None):
         self.arg = arg
         self.url_node = url_node
+        self.exact = exact
         self.contents = contents
 
     def get_path(self, context):
@@ -96,11 +105,18 @@ class AncestorNode(template.Node):
 
         # If the provided path is found at the root of the current path
         # render the contents of this tag
-        if re.match(path, current_path):
+
+        if self.exact:
+            matched = path == current_path
+        else:
+            matched = re.match(path, current_path)
+
+        if matched:
             # Return either the contents of an ifancestor tag or the
             # ANCESTOR_PHRASE if it's an ancestor tag
             if self.contents is not None:
                 return self.contents.render(context)
             else:
                 return settings.ANCESTOR_PHRASE
+
         return ''
